@@ -60,7 +60,7 @@ serve(async (req) => {
   // Save the question
   const { data: questionRecord, error: questionError } = await supabase
     .from('questions')
-    .insert({ email, question, status: 'pending' })
+    .insert({ email, question, tier: 'thought', status: 'pending' })
     .select('id')
     .single()
 

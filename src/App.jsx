@@ -1,32 +1,9 @@
 import { useState, useEffect, useRef } from "react";
 import { supabase } from "./supabase.js";
-import { STRIPE_PRICES, STRIPE_PUBLISHABLE_KEY } from "./stripe.js";
+import { BUNDLES, submitQuestion, getBalance } from "./thoughts.js";
+import { BalanceCheck, TopUpScreen, BalanceBadge } from "./TopUp.jsx";
 
 // ─── DATA ─────────────────────────────────────────────────────────────────────
-
-const TIERS = [
-  {
-    id: "ask", label: "Standard Inference", price: "$1",
-    priceId: STRIPE_PRICES?.ask,
-    technical: "Single Organic Agent. Non-deterministic output. Biological latency. No SLA.",
-    human: "You write something down. A person reads it. A person writes back. This used to be called a letter.",
-    specs: ["1× Organic Agent", "Non-deterministic", "Hours, not milliseconds"],
-  },
-  {
-    id: "sit", label: "Extended Context", price: "$3",
-    priceId: STRIPE_PRICES?.sit,
-    technical: "24-hour contemplation window. Full circadian processing cycle. Dream-state ideation not excluded.",
-    human: "Some questions deserve to be slept on. The human may go for a walk with yours. That's the feature.",
-    specs: ["1× Organic Agent", "Full sleep cycle included", "Up to 24 hrs"],
-  },
-  {
-    id: "really", label: "Deep Reasoning", price: "$5",
-    priceId: STRIPE_PRICES?.really,
-    technical: "Senior Organic Agent. Undivided attention. Post-hallucination window preferred. No multitasking.",
-    human: "For the question you haven't been able to ask anyone. Someone will hold it carefully.",
-    specs: ["Senior Organic Agent", "Full attention", "Worth it"],
-  },
-];
 
 const SPLIT_ROWS = [
   { tl: "SYSTEM TYPE", tech: "Organic Intelligence™. Carbon-based. Self-repairing. Emotionally complex. Biological neural network trained since birth at no cost to us.", human: "There is a person on the other end of this. A real one. Who will read your words and feel the weight of them." },
@@ -89,51 +66,20 @@ function shuffle(arr) {
   return a;
 }
 
-// ─── CHECKOUT HELPER ──────────────────────────────────────────────────────────
-
-async function redirectToStripe(tierId, question, email) {
-  // Create a pending record in Supabase first
-  const { data, error } = await supabase
-    .from('questions')
-    .insert({ question, tier: tierId, email, status: 'pending' })
-    .select('id')
-    .single();
-
-  if (error) {
-    console.error('Supabase insert error:', error);
-    alert('Something went wrong. Please try again.');
-    return;
-  }
-
-  const questionId = data.id;
-
-  // Load Stripe and redirect to checkout
-  const { loadStripe } = await import('https://esm.sh/@stripe/stripe-js@2');
-  const stripe = await loadStripe(STRIPE_PUBLISHABLE_KEY);
-  const tier = TIERS.find(t => t.id === tierId);
-
-  await stripe.redirectToCheckout({
-    lineItems: [{ price: tier.priceId, quantity: 1 }],
-    mode: 'payment',
-    successUrl: `${window.location.origin}/waiting?id=${questionId}`,
-    cancelUrl: `${window.location.origin}/`,
-    customerEmail: email,
-    clientReferenceId: questionId,
-  });
-}
 
 // ─── MAIN APP ─────────────────────────────────────────────────────────────────
 
 export default function App() {
-  // Detect /waiting?id=... route on load
+  // Detect /waiting?id=... and /?purchased=true&email=... routes on load
   const urlParams = new URLSearchParams(window.location.search);
   const waitingId = window.location.pathname === '/waiting' ? urlParams.get('id') : null;
+  const purchasedEmail = urlParams.get('purchased') === 'true' ? urlParams.get('email') : null;
 
   const [screen, setScreen] = useState(waitingId ? "waiting" : "home");
-  const [questionId] = useState(waitingId);
+  const [questionId, setQuestionId] = useState(waitingId);
   const [question, setQuestion] = useState("");
-  const [email, setEmail] = useState("");
-  const [tier, setTier] = useState("ask");
+  const [userEmail, setUserEmail] = useState(purchasedEmail || "");
+  const [userBalance, setUserBalance] = useState(0);
   const [aboutOpen, setAboutOpen] = useState(false);
   const [notOpen, setNotOpen] = useState(false);
   const [openLetter, setOpenLetter] = useState(null);
@@ -143,7 +89,16 @@ export default function App() {
   const [counted, setCounted] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const counterRef = useRef(null);
-  const activeTier = TIERS.find(t => t.id === tier);
+
+  // After returning from Stripe, check balance and go to ask screen
+  useEffect(() => {
+    if (!purchasedEmail) return;
+    getBalance(supabase, purchasedEmail).then(balance => {
+      setUserBalance(balance);
+      setScreen("ask");
+      window.history.replaceState({}, '', '/');
+    });
+  }, []);
 
   useEffect(() => {
     const fn = e => setCursor({ x: e.clientX, y: e.clientY });
@@ -173,17 +128,31 @@ export default function App() {
   const reset = () => {
     setScreen("home");
     setQuestion("");
-    setEmail("");
+    setUserEmail("");
+    setUserBalance(0);
     setAboutOpen(false);
     setNotOpen(false);
     window.history.pushState({}, '', '/');
   };
 
   const handleSubmit = async () => {
-    if (question.trim().length < 4 || !email.includes('@')) return;
+    if (question.trim().length < 4) return;
     setIsSubmitting(true);
-    await redirectToStripe(tier, question, email);
+    const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+    const result = await submitQuestion(supabaseUrl, userEmail, question);
     setIsSubmitting(false);
+    if (result.error === 'no_thoughts') {
+      setScreen("topup");
+      return;
+    }
+    if (result.success && result.questionId) {
+      setQuestionId(result.questionId);
+      setUserBalance(result.thoughtsRemaining);
+      setScreen("waiting");
+      window.history.pushState({}, '', `/waiting?id=${result.questionId}`);
+    } else {
+      alert('Something went wrong. Please try again.');
+    }
   };
 
   const CSS = `
@@ -238,7 +207,7 @@ export default function App() {
           <span style={{ fontFamily:"'DM Mono',monospace",fontSize:"13px",letterSpacing:".08em",color:"#18140f" }}>stillhuman<span style={{ opacity:.28 }}>.ai</span></span>
         </button>
         <div style={{ display:"flex",gap:"32px" }}>
-          {[["ABOUT",()=>{setAboutOpen(o=>!o);setNotOpen(false);}],["WHAT WE ARE NOT",()=>{setNotOpen(o=>!o);setAboutOpen(false);}],["GLOSSARY",()=>{setScreen("glossary");setAboutOpen(false);setNotOpen(false);}],["WRITE TO A HUMAN",()=>{setScreen("ask");setAboutOpen(false);setNotOpen(false);}]].map(([l,fn])=>(
+          {[["ABOUT",()=>{setAboutOpen(o=>!o);setNotOpen(false);}],["WHAT WE ARE NOT",()=>{setNotOpen(o=>!o);setAboutOpen(false);}],["GLOSSARY",()=>{setScreen("glossary");setAboutOpen(false);setNotOpen(false);}],["WRITE TO A HUMAN",()=>{setScreen("balance-check");setAboutOpen(false);setNotOpen(false);}]].map(([l,fn])=>(
             <button key={l} className="dim" onClick={fn} style={{ background:"none",border:"none",fontFamily:"'DM Mono',monospace",fontSize:"10px",letterSpacing:".12em",color:"rgba(24,20,15,.36)" }}>{l}</button>
           ))}
         </div>
@@ -289,6 +258,24 @@ export default function App() {
     return <GlossaryScreen cursor={cursor} hot={hot} setHot={setHot} CSS={CSS} Nav={Nav} Cur={Cur} reset={reset} />;
   }
 
+  // ── BALANCE CHECK ─────────────────────────────────────────────────────────
+  if (screen === "balance-check") {
+    return <BalanceCheck
+      onHasBalance={(email, balance) => { setUserEmail(email); setUserBalance(balance); setScreen("ask"); }}
+      onNeedsTopUp={(email) => { setUserEmail(email); setScreen("topup"); }}
+      CSS={CSS} Cur={Cur} Nav={Nav} hot={hot} setHot={setHot}
+    />;
+  }
+
+  // ── TOP UP ────────────────────────────────────────────────────────────────
+  if (screen === "topup") {
+    return <TopUpScreen
+      email={userEmail}
+      onBack={() => setScreen("balance-check")}
+      CSS={CSS} Cur={Cur} Nav={Nav} hot={hot} setHot={setHot}
+    />;
+  }
+
   // ── ASK ───────────────────────────────────────────────────────────────────
   if (screen === "ask") return (
     <div style={{ fontFamily:"'Libre Baskerville',Georgia,serif",background:"#ece8de",minHeight:"100vh",color:"#18140f" }}>
@@ -306,51 +293,28 @@ export default function App() {
           <p className="u6" style={{ fontFamily:"'DM Mono',monospace",fontSize:"8px",letterSpacing:".08em",color:"rgba(24,20,15,.2)",lineHeight:"2" }}>NOT THERAPY · NOT ADVICE · NOT MEDICAL OR LEGAL · JUST A PERSON · IF IN CRISIS CALL 988</p>
         </div>
         <div style={{ padding:"64px 52px",display:"flex",flexDirection:"column" }}>
+          <BalanceBadge balance={userBalance} />
+          <p style={{ fontFamily:"'DM Mono',monospace",fontSize:"9px",letterSpacing:".2em",color:"rgba(24,20,15,.28)",marginBottom:"4px" }}>SENDING AS</p>
+          <p style={{ fontFamily:"'DM Mono',monospace",fontSize:"13px",color:"rgba(24,20,15,.55)",marginBottom:"28px" }}>{userEmail}</p>
           <textarea value={question} onChange={e=>setQuestion(e.target.value)} maxLength={500} placeholder="What have you been sitting with?"
             style={{ flex:1,minHeight:"160px",width:"100%",border:"1px solid rgba(24,20,15,.15)",background:"transparent",padding:"24px",fontSize:"18px",lineHeight:"1.85",color:"#18140f",resize:"none",transition:"border-color .2s" }}
             onFocus={e=>e.target.style.borderColor="rgba(24,20,15,.45)"}
             onBlur={e=>e.target.style.borderColor="rgba(24,20,15,.15)"}
           />
-          <div style={{ display:"flex",justifyContent:"space-between",margin:"8px 0 24px" }}>
+          <div style={{ display:"flex",justifyContent:"space-between",margin:"8px 0 28px" }}>
             <span style={{ fontFamily:"'DM Mono',monospace",fontSize:"9px",letterSpacing:".1em",color:"rgba(24,20,15,.22)" }}>PRIVATE · NO AI READS THIS</span>
             <span style={{ fontFamily:"'DM Mono',monospace",fontSize:"9px",color:"rgba(24,20,15,.22)" }}>{question.length}/500</span>
           </div>
-
-          {/* Email field */}
-          <p style={{ fontFamily:"'DM Mono',monospace",fontSize:"9px",letterSpacing:".2em",color:"rgba(24,20,15,.28)",marginBottom:"8px" }}>YOUR EMAIL — YOUR ANSWER ARRIVES HERE</p>
-          <input
-            type="email"
-            value={email}
-            onChange={e=>setEmail(e.target.value)}
-            placeholder="you@"
-            style={{ width:"100%",border:"none",borderBottom:"1px solid rgba(24,20,15,.15)",background:"transparent",padding:"10px 0",fontSize:"15px",color:"#18140f",marginBottom:"28px",fontFamily:"'DM Mono',monospace" }}
-            onFocus={e=>e.target.style.borderBottomColor="#18140f"}
-            onBlur={e=>e.target.style.borderBottomColor="rgba(24,20,15,.15)"}
-          />
-
-          <p style={{ fontFamily:"'DM Mono',monospace",fontSize:"9px",letterSpacing:".25em",color:"rgba(24,20,15,.28)",marginBottom:"12px" }}>SELECT PACKAGE</p>
-          <div style={{ border:"1px solid rgba(24,20,15,.1)",marginBottom:"28px" }}>
-            {TIERS.map((t,i)=>(
-              <div key={t.id} className="row" onClick={()=>setTier(t.id)} style={{ display:"grid",gridTemplateColumns:"1fr 1fr",borderBottom:i<TIERS.length-1?"1px solid rgba(24,20,15,.08)":"none",borderLeft:tier===t.id?"3px solid #18140f":"3px solid transparent",background:tier===t.id?"rgba(24,20,15,.04)":"transparent" }}>
-                <div style={{ padding:"14px 18px",borderRight:"1px solid rgba(24,20,15,.08)",background:"rgba(24,20,15,.015)" }}>
-                  <p style={{ fontFamily:"'DM Mono',monospace",fontSize:"9px",letterSpacing:".08em",color:"rgba(24,20,15,.38)",marginBottom:"4px" }}>{t.label} · {t.price}</p>
-                  <p style={{ fontFamily:"'DM Mono',monospace",fontSize:"10px",lineHeight:"1.65",color:"rgba(24,20,15,.35)",letterSpacing:".01em" }}>{t.technical}</p>
-                </div>
-                <div style={{ padding:"14px 18px" }}><p style={{ fontSize:"13px",lineHeight:"1.7",color:"rgba(24,20,15,.65)" }}>{t.human}</p></div>
-              </div>
-            ))}
-          </div>
-
           <button className="btn"
             onClick={handleSubmit}
             onMouseEnter={()=>setHot(true)}
             onMouseLeave={()=>setHot(false)}
-            disabled={question.trim().length<4 || !email.includes('@') || isSubmitting}
-            style={{ width:"100%",padding:"18px",background:(question.trim().length>=4&&email.includes('@')&&!isSubmitting)?"#18140f":"rgba(24,20,15,.07)",color:(question.trim().length>=4&&email.includes('@')&&!isSubmitting)?"#ece8de":"rgba(24,20,15,.22)",border:"none",fontFamily:"'DM Mono',monospace",fontSize:"10px",letterSpacing:".2em" }}>
-            {isSubmitting ? "REDIRECTING TO PAYMENT..." : `SEND YOUR QUESTION · ${activeTier.price}`}
+            disabled={question.trim().length<4 || isSubmitting}
+            style={{ width:"100%",padding:"18px",background:(question.trim().length>=4&&!isSubmitting)?"#18140f":"rgba(24,20,15,.07)",color:(question.trim().length>=4&&!isSubmitting)?"#ece8de":"rgba(24,20,15,.22)",border:"none",fontFamily:"'DM Mono',monospace",fontSize:"10px",letterSpacing:".2em" }}>
+            {isSubmitting ? "SENDING..." : "SEND YOUR QUESTION · 1 THOUGHT"}
           </button>
           <p style={{ fontFamily:"'DM Mono',monospace",fontSize:"8px",letterSpacing:".08em",color:"rgba(24,20,15,.18)",textAlign:"center",marginTop:"12px",lineHeight:"2" }}>
-            YOU'LL BE TAKEN TO STRIPE TO PAY · THEN REDIRECTED TO YOUR WAITING PAGE<br/>
+            THIS COSTS ONE THOUGHT · YOUR ANSWER ARRIVES BY EMAIL<br/>
             NOT THERAPY · NOT ADVICE · IF IN CRISIS CALL 988
           </p>
         </div>
@@ -392,7 +356,7 @@ export default function App() {
             <p className="u4" style={{ fontSize:"18px",lineHeight:"1.9",color:"rgba(24,20,15,.6)" }}>Like a letter. Like it used to be.</p>
           </div>
           <div className="u5" style={{ display:"flex",flexDirection:"column",gap:"10px" }}>
-            <button className="btn" onClick={()=>setScreen("ask")} onMouseEnter={()=>setHot(true)} onMouseLeave={()=>setHot(false)} style={{ background:"#18140f",color:"#ece8de",border:"none",padding:"18px 44px",fontFamily:"'DM Mono',monospace",fontSize:"10px",letterSpacing:".2em",alignSelf:"flex-start" }}>WRITE TO A HUMAN</button>
+            <button className="btn" onClick={()=>setScreen("balance-check")} onMouseEnter={()=>setHot(true)} onMouseLeave={()=>setHot(false)} style={{ background:"#18140f",color:"#ece8de",border:"none",padding:"18px 44px",fontFamily:"'DM Mono',monospace",fontSize:"10px",letterSpacing:".2em",alignSelf:"flex-start" }}>WRITE TO A HUMAN</button>
             <span style={{ fontFamily:"'DM Mono',monospace",fontSize:"9px",letterSpacing:".1em",color:"rgba(24,20,15,.24)" }}>FROM $1 · PRIVATE · NO AI IN THE LOOP AFTER THIS</span>
           </div>
         </div>
@@ -449,18 +413,20 @@ export default function App() {
 
       <section style={{ borderBottom:"1px solid rgba(24,20,15,.09)" }}>
         <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",background:"#18140f" }}>
-          <div style={{ padding:"14px 40px",borderRight:"1px solid rgba(236,232,222,.08)" }}><p style={{ fontFamily:"'DM Mono',monospace",fontSize:"9px",letterSpacing:".3em",color:"rgba(236,232,222,.3)" }}>INFERENCE PACKAGES</p></div>
+          <div style={{ padding:"14px 40px",borderRight:"1px solid rgba(236,232,222,.08)" }}><p style={{ fontFamily:"'DM Mono',monospace",fontSize:"9px",letterSpacing:".3em",color:"rgba(236,232,222,.3)" }}>THOUGHT BUNDLES</p></div>
           <div style={{ padding:"14px 40px" }}><p style={{ fontFamily:"'DM Mono',monospace",fontSize:"9px",letterSpacing:".3em",color:"rgba(236,232,222,.3)" }}>IN PLAIN LANGUAGE</p></div>
         </div>
-        {TIERS.map((t,i)=>(
-          <div key={t.id} className="row" onClick={()=>{setTier(t.id);setScreen("ask");}} style={{ display:"grid",gridTemplateColumns:"1fr 1fr",borderBottom:i<TIERS.length-1?"1px solid rgba(24,20,15,.09)":"none",borderLeft:tier===t.id?"3px solid #18140f":"3px solid transparent" }}>
+        {BUNDLES.map((b,i)=>(
+          <div key={b.id} className="row" onClick={()=>setScreen("balance-check")} style={{ display:"grid",gridTemplateColumns:"1fr 1fr",borderBottom:i<BUNDLES.length-1?"1px solid rgba(24,20,15,.09)":"none" }}>
             <div style={{ padding:"32px 40px",borderRight:"1px solid rgba(24,20,15,.09)",background:"rgba(24,20,15,.018)",display:"flex",justifyContent:"space-between",alignItems:"flex-start" }}>
-              <div><p style={{ fontFamily:"'DM Mono',monospace",fontSize:"10px",letterSpacing:".1em",color:"rgba(24,20,15,.4)",marginBottom:"8px" }}>{t.label}</p><p style={{ fontFamily:"'DM Mono',monospace",fontSize:"12px",lineHeight:"1.9",color:"rgba(24,20,15,.42)",letterSpacing:".02em" }}>{t.technical}</p></div>
-              <span style={{ fontSize:"28px",fontWeight:700,letterSpacing:"-.03em",marginLeft:"24px",flexShrink:0 }}>{t.price}</span>
+              <div>
+                <p style={{ fontFamily:"'DM Mono',monospace",fontSize:"10px",letterSpacing:".1em",color:"rgba(24,20,15,.4)",marginBottom:"8px" }}>{b.label}</p>
+                {b.perThought && <p style={{ fontFamily:"'DM Mono',monospace",fontSize:"9px",color:"rgba(24,20,15,.28)",letterSpacing:".08em" }}>{b.perThought}</p>}
+              </div>
+              <span style={{ fontSize:"28px",fontWeight:700,letterSpacing:"-.03em",marginLeft:"24px",flexShrink:0 }}>{b.price}</span>
             </div>
-            <div style={{ padding:"32px 40px" }}>
-              <p style={{ fontSize:"16px",lineHeight:"1.9",color:"rgba(24,20,15,.72)",marginBottom:"14px" }}>{t.human}</p>
-              <div style={{ display:"flex",gap:"8px",flexWrap:"wrap" }}>{t.specs.map(s=><span key={s} style={{ fontFamily:"'DM Mono',monospace",fontSize:"8px",letterSpacing:".12em",color:"rgba(24,20,15,.3)",border:"1px solid rgba(24,20,15,.12)",padding:"3px 8px" }}>{s}</span>)}</div>
+            <div style={{ padding:"32px 40px",display:"flex",alignItems:"center" }}>
+              <p style={{ fontSize:"16px",lineHeight:"1.9",color:"rgba(24,20,15,.72)" }}>{b.description}</p>
             </div>
           </div>
         ))}
@@ -474,7 +440,7 @@ export default function App() {
         <div style={{ padding:"72px 52px",display:"flex",flexDirection:"column",justifyContent:"center" }}>
           <h2 style={{ fontSize:"clamp(30px,4vw,50px)",fontWeight:700,letterSpacing:"-.04em",lineHeight:".95",marginBottom:"28px" }}>What would you ask<br/><em style={{ fontWeight:400,color:"rgba(24,20,15,.36)" }}>if a person answered?</em></h2>
           <div style={{ display:"flex",flexDirection:"column",gap:"10px" }}>
-            <button className="btn" onClick={()=>setScreen("ask")} onMouseEnter={()=>setHot(true)} onMouseLeave={()=>setHot(false)} style={{ background:"#18140f",color:"#ece8de",border:"none",padding:"18px 44px",fontFamily:"'DM Mono',monospace",fontSize:"10px",letterSpacing:".2em",alignSelf:"flex-start" }}>WRITE TO A HUMAN</button>
+            <button className="btn" onClick={()=>setScreen("balance-check")} onMouseEnter={()=>setHot(true)} onMouseLeave={()=>setHot(false)} style={{ background:"#18140f",color:"#ece8de",border:"none",padding:"18px 44px",fontFamily:"'DM Mono',monospace",fontSize:"10px",letterSpacing:".2em",alignSelf:"flex-start" }}>WRITE TO A HUMAN</button>
             <span style={{ fontFamily:"'DM Mono',monospace",fontSize:"9px",letterSpacing:".1em",color:"rgba(24,20,15,.24)" }}>FROM $1 · PRIVATE · ANSWERED BY HAND</span>
           </div>
         </div>
