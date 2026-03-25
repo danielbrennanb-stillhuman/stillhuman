@@ -88,8 +88,29 @@ serve(async (req) => {
 
   const remainingThoughts = updatedWallet?.thoughts_remaining ?? 0
 
+  // Send SMS to owner with the question
+  const twilioSid = Deno.env.get('TWILIO_ACCOUNT_SID')
+  const twilioAuth = Deno.env.get('TWILIO_AUTH_TOKEN')
+  const twilioFrom = Deno.env.get('TWILIO_FROM_NUMBER')
+  const ownerPhone = Deno.env.get('YOUR_PHONE_NUMBER')
+
+  if (twilioSid && twilioAuth && twilioFrom && ownerPhone) {
+    const smsBody = `New question from ${email}:\n\n${question}\n\nReply to this SMS to answer.`
+    await fetch(`https://api.twilio.com/2010-04-01/Accounts/${twilioSid}/Messages.json`, {
+      method: 'POST',
+      headers: {
+        'Authorization': 'Basic ' + btoa(`${twilioSid}:${twilioAuth}`),
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: new URLSearchParams({
+        From: twilioFrom,
+        To: ownerPhone,
+        Body: smsBody,
+      }).toString(),
+    })
+  }
+
   // Send nudge email if balance is now zero
-  // Using Supabase's built-in email (or swap for Resend/SendGrid later)
   if (remainingThoughts === 0) {
     await supabase.functions.invoke('send-nudge-email', {
       body: { email, remaining: 0 }
