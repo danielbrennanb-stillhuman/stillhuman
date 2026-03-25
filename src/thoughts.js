@@ -70,9 +70,13 @@ export async function purchaseBundle(bundle, email) {
 
 // Submit a question — calls the Supabase edge function
 export async function submitQuestion(supabaseUrl, email, question) {
+  const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY
   const res = await fetch(`${supabaseUrl}/functions/v1/submit-question`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${supabaseKey}`,
+    },
     body: JSON.stringify({ email, question }),
   })
   return res.json()

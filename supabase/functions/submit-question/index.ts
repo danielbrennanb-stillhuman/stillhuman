@@ -11,9 +11,17 @@ const supabase = createClient(
   Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') as string
 )
 
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+}
+
 serve(async (req) => {
+  if (req.method === 'OPTIONS') {
+    return new Response('ok', { headers: corsHeaders })
+  }
   if (req.method !== 'POST') {
-    return new Response('Method not allowed', { status: 405 })
+    return new Response('Method not allowed', { status: 405, headers: corsHeaders })
   }
 
   const { email, question } = await req.json()
@@ -21,7 +29,7 @@ serve(async (req) => {
   if (!email || !question) {
     return new Response(JSON.stringify({ error: 'Missing email or question' }), {
       status: 400,
-      headers: { 'Content-Type': 'application/json' }
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' }
     })
   }
 
@@ -38,7 +46,7 @@ serve(async (req) => {
       message: 'No Thoughts remaining. Please top up to continue.'
     }), {
       status: 402,
-      headers: { 'Content-Type': 'application/json' }
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' }
     })
   }
 
@@ -53,7 +61,7 @@ serve(async (req) => {
       message: 'No Thoughts remaining.'
     }), {
       status: 402,
-      headers: { 'Content-Type': 'application/json' }
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' }
     })
   }
 
@@ -67,7 +75,7 @@ serve(async (req) => {
   if (questionError) {
     return new Response(JSON.stringify({ error: 'Failed to save question' }), {
       status: 500,
-      headers: { 'Content-Type': 'application/json' }
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' }
     })
   }
 
@@ -93,6 +101,6 @@ serve(async (req) => {
     questionId: questionRecord.id,
     thoughtsRemaining: remainingThoughts,
   }), {
-    headers: { 'Content-Type': 'application/json' }
+    headers: { ...corsHeaders, 'Content-Type': 'application/json' }
   })
 })
