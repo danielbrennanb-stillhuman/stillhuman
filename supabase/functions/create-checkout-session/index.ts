@@ -16,15 +16,15 @@ serve(async (req) => {
     return new Response('ok', { headers: corsHeaders })
   }
 
-  const { priceId, email } = await req.json()
+  const { priceId, email, origin } = await req.json()
 
   const session = await stripe.checkout.sessions.create({
     payment_method_types: ['card'],
     line_items: [{ price: priceId, quantity: 1 }],
     mode: 'payment',
     customer_email: email,
-    success_url: `${req.headers.get('origin')}/?purchased=true&email=${encodeURIComponent(email)}`,
-    cancel_url: `${req.headers.get('origin')}/`,
+    success_url: `${origin}/?purchased=true&email=${encodeURIComponent(email)}`,
+    cancel_url: `${origin}/`,
     metadata: { price_id: priceId },
   })
 

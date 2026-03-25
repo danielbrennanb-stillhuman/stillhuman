@@ -55,13 +55,17 @@ export async function purchaseBundle(bundle, email) {
     headers: {
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${supabaseKey}`,
-      'origin': window.location.origin,
     },
-    body: JSON.stringify({ priceId: bundle.priceId, email }),
+    body: JSON.stringify({ priceId: bundle.priceId, email, origin: window.location.origin }),
   })
 
-  const { url } = await res.json()
-  if (url) window.location.href = url
+  const data = await res.json()
+  if (data.url) {
+    window.location.href = data.url
+  } else {
+    console.error('Checkout error:', data)
+    alert('Something went wrong starting checkout. Please try again.')
+  }
 }
 
 // Submit a question — calls the Supabase edge function
