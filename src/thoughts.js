@@ -47,17 +47,21 @@ export async function getBalance(supabase, email) {
 
 // Redirect to Stripe Checkout to purchase a bundle
 export async function purchaseBundle(bundle, email) {
-  const { loadStripe } = await import('@stripe/stripe-js')
-  const stripe = await loadStripe(import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY)
+  const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
+  const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY
 
-  await stripe.redirectToCheckout({
-    lineItems: [{ price: bundle.priceId, quantity: 1 }],
-    mode: 'payment',
-    successUrl: `${window.location.origin}/?purchased=true&email=${encodeURIComponent(email)}`,
-    cancelUrl: `${window.location.origin}/`,
-    customerEmail: email,
-    metadata: { price_id: bundle.priceId },
+  const res = await fetch(`${supabaseUrl}/functions/v1/create-checkout-session`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${supabaseKey}`,
+      'origin': window.location.origin,
+    },
+    body: JSON.stringify({ priceId: bundle.priceId, email }),
   })
+
+  const { url } = await res.json()
+  if (url) window.location.href = url
 }
 
 // Submit a question — calls the Supabase edge function
