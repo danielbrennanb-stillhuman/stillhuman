@@ -47,7 +47,7 @@ export async function getBalance(supabase, email) {
 
 // Redirect to Stripe Checkout to purchase a bundle
 export async function purchaseBundle(bundle, email) {
-  const { loadStripe } = await import('https://esm.sh/@stripe/stripe-js@2')
+  const { loadStripe } = await import('@stripe/stripe-js')
   const stripe = await loadStripe(import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY)
 
   await stripe.redirectToCheckout({
