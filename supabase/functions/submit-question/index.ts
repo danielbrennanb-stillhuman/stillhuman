@@ -88,25 +88,23 @@ serve(async (req) => {
 
   const remainingThoughts = updatedWallet?.thoughts_remaining ?? 0
 
-  // Send SMS to owner with the question
-  const twilioSid = Deno.env.get('TWILIO_ACCOUNT_SID')
-  const twilioAuth = Deno.env.get('TWILIO_AUTH_TOKEN')
-  const twilioFrom = Deno.env.get('TWILIO_FROM_NUMBER')
-  const ownerPhone = Deno.env.get('YOUR_PHONE_NUMBER')
+  // Send email notification to owner via Resend
+  const resendKey = Deno.env.get('RESEND_API_KEY')
+  const ownerEmail = Deno.env.get('OWNER_EMAIL')
 
-  if (twilioSid && twilioAuth && twilioFrom && ownerPhone) {
-    const smsBody = `New question from ${email}:\n\n${question}\n\nReply to this SMS to answer.`
-    await fetch(`https://api.twilio.com/2010-04-01/Accounts/${twilioSid}/Messages.json`, {
+  if (resendKey && ownerEmail) {
+    await fetch('https://api.resend.com/emails', {
       method: 'POST',
       headers: {
-        'Authorization': 'Basic ' + btoa(`${twilioSid}:${twilioAuth}`),
-        'Content-Type': 'application/x-www-form-urlencoded',
+        'Authorization': `Bearer ${resendKey}`,
+        'Content-Type': 'application/json',
       },
-      body: new URLSearchParams({
-        From: twilioFrom,
-        To: ownerPhone,
-        Body: smsBody,
-      }).toString(),
+      body: JSON.stringify({
+        from: 'stillhuman <onboarding@resend.dev>',
+        to: ownerEmail,
+        subject: `New question from ${email}`,
+        text: `Someone asked:\n\n${question}\n\nFrom: ${email}\n\nLog in to Supabase to reply.`,
+      }),
     })
   }
 
