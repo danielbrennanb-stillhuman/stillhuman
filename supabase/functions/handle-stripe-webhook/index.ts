@@ -54,25 +54,30 @@ serve(async (req) => {
       return new Response('Bad data', { status: 400 })
     }
 
+    console.log(`Processing: email=${email}, priceId=${priceId}, thoughtsToAdd=${thoughtsToAdd}`)
+
     // Upsert wallet — creates if new, then increment separately for returning users
-    await supabase.from('wallets').upsert(
+    const upsertResult = await supabase.from('wallets').upsert(
       { email, thoughts_remaining: 0, total_purchased: 0 },
       { onConflict: 'email', ignoreDuplicates: true }
     )
+    console.log('Upsert result:', JSON.stringify(upsertResult))
 
     // Atomically increment balance
-    await supabase.rpc('increment_thoughts', {
+    const rpcResult = await supabase.rpc('increment_thoughts', {
       user_email: email,
       amount: thoughtsToAdd,
     })
+    console.log('RPC result:', JSON.stringify(rpcResult))
 
     // Log the purchase
-    await supabase.from('purchases').insert({
+    const insertResult = await supabase.from('purchases').insert({
       email,
       thoughts_purchased: thoughtsToAdd,
       amount_cents: session.amount_total ?? 0,
       stripe_session_id: session.id,
     })
+    console.log('Insert result:', JSON.stringify(insertResult))
 
     console.log(`Credited ${thoughtsToAdd} Thoughts to ${email}`)
   }
