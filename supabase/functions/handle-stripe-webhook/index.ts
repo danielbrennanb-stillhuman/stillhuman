@@ -28,7 +28,7 @@ serve(async (req) => {
 
   if (webhookSecret && signature) {
     try {
-      event = stripe.webhooks.constructEvent(body, signature, webhookSecret)
+      event = await stripe.webhooks.constructEventAsync(body, signature, webhookSecret)
     } catch (err) {
       console.error('Signature verification failed:', err.message)
       // Fall through to parse the event without verification
@@ -70,13 +70,13 @@ serve(async (req) => {
     })
     console.log('RPC result:', JSON.stringify(rpcResult))
 
-    // Log the purchase
-    const insertResult = await supabase.from('purchases').insert({
+    // Log the purchase (ignore duplicate if webhook fires twice)
+    const insertResult = await supabase.from('purchases').upsert({
       email,
       thoughts_purchased: thoughtsToAdd,
       amount_cents: session.amount_total ?? 0,
       stripe_session_id: session.id,
-    })
+    }, { onConflict: 'stripe_session_id', ignoreDuplicates: true })
     console.log('Insert result:', JSON.stringify(insertResult))
 
     console.log(`Credited ${thoughtsToAdd} Thoughts to ${email}`)
